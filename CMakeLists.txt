@@ -5,7 +5,7 @@ project(ProstateMRIAnnotator)
 #-----------------------------------------------------------------------------
 # Extension meta-information
 set(EXTENSION_HOMEPAGE "https://www.slicer.org/wiki/Documentation/Nightly/Extensions/ProstateMRIAnnotator")
-set(EXTENSION_CATEGORY "Annotation Tool")
+set(EXTENSION_CATEGORY "Radiology")
 set(EXTENSION_CONTRIBUTORS "Jesus Alejandro Alzate-Grisales (UMIB-IA)")
 set(EXTENSION_DESCRIPTION "This is an extension for multimodality MRI segmentation for Prostate Cancer (T2w, DWI and ADC imaging)")
 set(EXTENSION_ICONURL "https://www.example.com/Slicer/Extensions/ProstateMRIAnnotator.png")
@@ -19,6 +19,7 @@ include(${Slicer_USE_FILE})
 
 #-----------------------------------------------------------------------------
 # Extension modules
+add_subdirectory(MRIAnnotator)
 ## NEXT_MODULE
 
 #-----------------------------------------------------------------------------
