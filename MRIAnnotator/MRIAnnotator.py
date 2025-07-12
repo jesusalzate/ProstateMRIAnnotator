@@ -43,17 +43,36 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
         # Directory path input
         self.directoryPathEdit = qt.QLineEdit()
         self.directoryPathEdit.setPlaceholderText("Enter directory path")
-        self.layout.addWidget(self.directoryPathEdit)
+        
+        # Button to browse directory
+        self.browseDirectoryButton = qt.QPushButton("Browse Directory")
+        self.browseDirectoryButton.connect('clicked(bool)', self.onBrowseDirectoryButton)
+        
+        # Layout for directory selection
+        directoryLayout = qt.QHBoxLayout()
+        directoryLayout.addWidget(self.directoryPathEdit)
+        directoryLayout.addWidget(self.browseDirectoryButton)
+        directoryGroup = qt.QGroupBox("Root Directory")
+        directoryGroup.setLayout(directoryLayout)
+        self.layout.addWidget(directoryGroup)
 
         # Button to load CSV
         self.loadCSVButton = qt.QPushButton("Load CSV")
-        self.layout.addWidget(self.loadCSVButton)
-        self.loadCSVButton.connect('clicked(bool)', self.onLoadCSVButton)
-
+        
         # Select modality for csv
-
         self.modalitySelector = qt.QComboBox()
         self.modalitySelector.addItems(["T2", "ADC", "DWI", "Lesion"])
+        
+        # Layout for CSV loading and modality selection
+        csvLayout = qt.QHBoxLayout()
+        csvLayout.addWidget(self.loadCSVButton)
+        csvLayout.addWidget(qt.QLabel("Modality:"))
+        csvLayout.addWidget(self.modalitySelector)
+        csvGroup = qt.QGroupBox("CSV and Modality Selection")
+        csvGroup.setLayout(csvLayout)
+        self.layout.addWidget(csvGroup)
+        
+        self.loadCSVButton.connect('clicked(bool)', self.onLoadCSVButton)
         
 
         # Button to load next images
@@ -108,7 +127,7 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
                 background-color: #0d47a1;
             }
         """
-        for btn in [self.loadCSVButton, self.nextButton, self.previousButton, self.saveSegmentationImageButton]:
+        for btn in [self.loadCSVButton, self.browseDirectoryButton, self.nextButton, self.previousButton, self.saveSegmentationImageButton]:
             btn.setStyleSheet(button_style)
             btn.setMinimumHeight(32)
             btn.setMinimumWidth(120)
@@ -171,6 +190,33 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
             self.segmentedIndices = set()
         except Exception as e:
             slicer.util.errorDisplay(f"Failed to load CSV: {str(e)}")
+
+    def onBrowseDirectoryButton(self):
+        """
+        Handle the event when the 'Browse Directory' button is clicked.
+        Opens a file dialog to select a root directory and sets it in the text field.
+        """
+        try:
+            # Get current directory from text field or use home directory as default
+            currentDir = self.directoryPathEdit.text if self.directoryPathEdit.text else os.path.expanduser("~")
+            
+            directoryPath = qt.QFileDialog.getExistingDirectory(
+                self.parent, 
+                "Select Root Directory for Images", 
+                currentDir
+            )
+            
+            if directoryPath:
+                self.directoryPathEdit.setText(directoryPath)
+                print(f"Root directory set to: {directoryPath}")  # Debug print
+                slicer.util.infoDisplay(f"Root directory set to: {directoryPath}")
+            else:
+                print("No directory selected")  # Debug print
+                
+        except Exception as e:
+            error_msg = f"Error selecting directory: {str(e)}"
+            print(error_msg)  # Debug print
+            slicer.util.errorDisplay(error_msg)
 
     def onNextButton(self):
         """
