@@ -28,17 +28,6 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
         Set up the UI elements and initialize the widget.
         """
         ScriptedLoadableModuleWidget.setup(self)
-        
-        # UI elements for patient selection
-        self.patientSelector = slicer.qMRMLNodeComboBox()
-        self.patientSelector.nodeTypes = ["vtkMRMLFolderDisplayNode"]
-        self.patientSelector.selectNodeUponCreation = True
-        self.patientSelector.addEnabled = False
-        self.patientSelector.removeEnabled = False
-        self.patientSelector.noneEnabled = False
-        self.patientSelector.showHidden = False
-        self.patientSelector.setMRMLScene(slicer.mrmlScene)
-        self.layout.addWidget(self.patientSelector)
 
         # Directory path input
         self.directoryPathEdit = qt.QLineEdit()
@@ -157,6 +146,10 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
         self.layout.addWidget(self.progressBar)
 
         self.linkSliceViews()
+        # Initialize tracking of loaded nodes for safe removal
+        self.loadedVolumeNodes = []
+        self.loadedSegmentationNode = None
+        self.segmentEditorNode = None
         self.imagePaths = []
         self.currentIndex = -1
         self.segmentedIndices = set()
@@ -305,9 +298,25 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
 
     def removePreviousImages(self):
         """
-        Remove previously loaded images from the scene.
+        Safely remove previously loaded images, segmentations, and editor nodes.
         """
-        slicer.mrmlScene.Clear(0)
+        # Remove only tracked volume nodes
+        for node in getattr(self, 'loadedVolumeNodes', []):
+            if node and slicer.mrmlScene.GetNodeByID(node.GetID()):
+                slicer.mrmlScene.RemoveNode(node)
+        self.loadedVolumeNodes = []
+        # Remove loaded segmentation if any
+        if getattr(self, 'loadedSegmentationNode', None):
+            node = self.loadedSegmentationNode
+            if slicer.mrmlScene.GetNodeByID(node.GetID()):
+                slicer.mrmlScene.RemoveNode(node)
+            self.loadedSegmentationNode = None
+        # Remove segment editor node
+        if getattr(self, 'segmentEditorNode', None):
+            node = self.segmentEditorNode
+            if slicer.mrmlScene.GetNodeByID(node.GetID()):
+                slicer.mrmlScene.RemoveNode(node)
+            self.segmentEditorNode = None
 
     def loadPatientImages(self, t2Path, adcPath, dwiPath, lesionPath):
         """
@@ -323,15 +332,18 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
         - Exception: If the images cannot be loaded.
         """
         try:
+            # Load volumes and optional lesion segmentation
             t2Node = self.loadVolume(t2Path)
             adcNode = self.loadVolume(adcPath)
             dwiNode = self.loadVolume(dwiPath)
-            
             if os.path.isfile(lesionPath):
                 lesionNode = self.loadSegmentation(lesionPath, t2Node)
             else:
                 slicer.util.infoDisplay("No Lesion Found for this Session.")
                 lesionNode = None
+            # Track loaded nodes for removal
+            self.loadedVolumeNodes = [t2Node, adcNode, dwiNode]
+            self.loadedSegmentationNode = lesionNode
         except Exception as e:
             slicer.util.errorDisplay(f"Failed to load images: {str(e)}")
             return
@@ -527,6 +539,8 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
         - segmentationNode: The segmentation node.
         """
         segmentEditorNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSegmentEditorNode")
+        # Track segment editor node for cleanup
+        self.segmentEditorNode = segmentEditorNode
         self.segmentEditorWidget.setMRMLSegmentEditorNode(segmentEditorNode)
         
         if segmentationNode is None:
@@ -550,7 +564,6 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
         """
         Guarda un segmento específico de un nodo de segmentación como archivo NIfTI (.nii.gz).
         """
-        import sitkUtils
         # Crear un nodo temporal de segmentación solo con el segmento deseado
         temp_segmentation = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSegmentationNode")
         temp_segmentation.GetSegmentation().AddEmptySegment(segment_name)
