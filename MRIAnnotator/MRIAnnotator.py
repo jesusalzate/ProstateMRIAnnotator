@@ -59,16 +59,10 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
         # Button to load CSV
         self.loadCSVButton = qt.QPushButton("Load CSV")
         
-        # Select modality for csv
-        self.modalitySelector = qt.QComboBox()
-        self.modalitySelector.addItems(["T2", "ADC", "DWI", "Lesion"])
-        
-        # Layout for CSV loading and modality selection
+        # Layout for CSV loading
         csvLayout = qt.QHBoxLayout()
         csvLayout.addWidget(self.loadCSVButton)
-        csvLayout.addWidget(qt.QLabel("Modality:"))
-        csvLayout.addWidget(self.modalitySelector)
-        csvGroup = qt.QGroupBox("CSV and Modality Selection")
+        csvGroup = qt.QGroupBox("CSV Selection")
         csvGroup.setLayout(csvLayout)
         self.layout.addWidget(csvGroup)
         
@@ -94,6 +88,13 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
         self.saveSegmentationImageButton = qt.QPushButton("Save Segmentation as Image")
         self.layout.addWidget(self.saveSegmentationImageButton)
         self.saveSegmentationImageButton.connect('clicked(bool)', self.onSaveSegmentationImageButton)
+
+        # Button to select segmentation modality
+        self.selectSegmentationModalityButton = qt.QPushButton("Select Segmentation Modality")
+        self.selectSegmentationModalityButton.setToolTip("Choose the modality column for saving segmentations.")
+        self.selectSegmentationModalityButton.clicked.connect(self.onSelectSegmentationModality)
+        self.layout.addWidget(self.selectSegmentationModalityButton)
+        self.selectedSegmentationModality = None
 
         # Improve UI style
         # Group navigation buttons
@@ -188,6 +189,19 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
                 self.imagePaths = [row for row in reader]
             self.currentIndex = -1
             self.segmentedIndices = set()
+            
+            # Auto-select the first tumor modality if none is selected
+            if self.imagePaths and (not hasattr(self, 'selectedSegmentationModality') or self.selectedSegmentationModality is None):
+                columns = list(self.imagePaths[0].keys())
+                tumor_columns = [col for col in columns if isinstance(col, str) and 'tumor' in col.lower()]
+                if tumor_columns:
+                    self.selectedSegmentationModality = tumor_columns[0]
+                    print(f"Auto-selected segmentation modality: {self.selectedSegmentationModality}")
+                    slicer.util.infoDisplay(f"Auto-selected segmentation modality: {self.selectedSegmentationModality}")
+                else:
+                    self.selectedSegmentationModality = None
+                    print("No tumor columns found in CSV")
+                    
         except Exception as e:
             slicer.util.errorDisplay(f"Failed to load CSV: {str(e)}")
 
@@ -227,8 +241,9 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
             slicer.util.errorDisplay("No images loaded from CSV.")
             return
 
-        # Mark current as segmented if not already
+        # Save current segmentation before moving to next
         if 0 <= self.currentIndex < len(self.imagePaths):
+            self.saveCurrentSegmentationForCurrentRow()
             self.segmentedIndices.add(self.currentIndex)
 
         self.currentIndex += 1
@@ -242,7 +257,14 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
         t2Path = os.path.join(directoryPath, imagePaths['T2'])
         adcPath = os.path.join(directoryPath, imagePaths['ADC'])
         dwiPath = os.path.join(directoryPath, imagePaths['DWI'])
-        lesionPath = os.path.join(directoryPath, imagePaths.get('Lesion', ''))
+        # Usar la modalidad seleccionada para la segmentación
+        lesion_col = self.selectedSegmentationModality if hasattr(self, 'selectedSegmentationModality') and self.selectedSegmentationModality else 'Lesion'
+        lesionPath = os.path.join(directoryPath, imagePaths.get(lesion_col, ''))
+        
+        # Debug prints
+        print(f"Selected segmentation modality: {lesion_col}")
+        print(f"Lesion path: {lesionPath}")
+        print(f"Available columns: {list(imagePaths.keys())}")
 
         self.removePreviousImages()
         self.loadPatientImages(t2Path, adcPath, dwiPath, lesionPath)
@@ -268,7 +290,15 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
         t2Path = os.path.join(directoryPath, imagePaths['T2'])
         adcPath = os.path.join(directoryPath, imagePaths['ADC'])
         dwiPath = os.path.join(directoryPath, imagePaths['DWI'])
-        lesionPath = os.path.join(directoryPath, imagePaths.get('Lesion', ''))
+        # Usar la modalidad seleccionada para la segmentación
+        lesion_col = self.selectedSegmentationModality if hasattr(self, 'selectedSegmentationModality') and self.selectedSegmentationModality else 'Lesion'
+        lesionPath = os.path.join(directoryPath, imagePaths.get(lesion_col, ''))
+        
+        # Debug prints
+        print(f"Selected segmentation modality: {lesion_col}")
+        print(f"Lesion path: {lesionPath}")
+        print(f"Available columns: {list(imagePaths.keys())}")
+        
         self.removePreviousImages()
         self.loadPatientImages(t2Path, adcPath, dwiPath, lesionPath)
         self.updateSegmentationProgress()
@@ -583,6 +613,224 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
             slicer.util.errorDisplay(f"Error al guardar la segmentación: {str(e)}")
             if labelmapVolumeNode:
                 slicer.mrmlScene.RemoveNode(labelmapVolumeNode)
+
+    def onSelectSegmentationModality(self):
+        """
+        Show a dialog to select the tumor modality column for saving segmentations.
+        Only columns containing 'tumor' (case-insensitive) are shown.
+        """
+        if not hasattr(self, 'imagePaths') or not self.imagePaths:
+            slicer.util.errorDisplay("Load a CSV first.")
+            return
+        columns = list(self.imagePaths[0].keys())
+        print(f"All columns: {columns}")
+        # Filtrar solo columnas que sean str y contengan 'tumor' (insensible a mayúsculas/minúsculas)
+        tumor_columns = [col for col in columns if isinstance(col, str) and 'tumor' in col.lower()]
+        print(f"Tumor columns found: {tumor_columns}")
+        if not tumor_columns:
+            slicer.util.errorDisplay("No tumor modalities found in CSV columns.")
+            return
+        item, ok = qt.QInputDialog.getItem(self.parent, "Select Tumor Segmentation Modality", "Tumor Modality:", tumor_columns, 0, False)
+        if ok and item:
+            self.selectedSegmentationModality = item
+            print(f"User selected modality: {item}")
+            slicer.util.infoDisplay(f"Segmentation modality set to: {item}")
+        else:
+            slicer.util.infoDisplay("No modality selected. Using default.")
+        # Set default if not set
+        if not self.selectedSegmentationModality:
+            self.selectedSegmentationModality = tumor_columns[0]
+            print(f"Set default modality: {self.selectedSegmentationModality}")
+
+    def saveCurrentSegmentationForCurrentRow(self):
+        """
+        Save the current segmentation in the selected modality for the current row.
+        If no segmentation, create empty.nii.gz. If empty exists and segmentation is created, replace it.
+        """
+        if not hasattr(self, 'imagePaths') or self.currentIndex < 0 or self.currentIndex >= len(self.imagePaths):
+            return
+            
+        try:
+            row = self.imagePaths[self.currentIndex]
+            id_actual = row.get('ID', str(self.currentIndex+1).zfill(3))
+            directoryPath = self.directoryPathEdit.text
+            
+            if not directoryPath:
+                print("No directory path set")
+                return
+                
+            # Folder for this case
+            case_folder = os.path.join(directoryPath, f"{id_actual}_done")
+            if not os.path.exists(case_folder):
+                os.makedirs(case_folder)
+                
+            # File name for segmentation
+            modality = self.selectedSegmentationModality or list(row.keys())[0]
+            seg_filename = os.path.join(case_folder, f"{modality}.nii.gz")
+            empty_filename = os.path.join(case_folder, "empty.nii.gz")
+            
+            print(f"Attempting to save segmentation for modality: {modality}")
+            
+            segmentationNode = self.segmentEditorWidget.segmentationNode()
+            
+            # Check if segmentation exists and has segments
+            if not segmentationNode:
+                print("No segmentation node found")
+                self._createEmptyFile(empty_filename)
+                return
+                
+            segmentation = segmentationNode.GetSegmentation()
+            if not segmentation or segmentation.GetNumberOfSegments() == 0:
+                print("No segments found in segmentation")
+                self._createEmptyFile(empty_filename)
+                return
+                
+            print(f"Found segmentation with {segmentation.GetNumberOfSegments()} segments")
+            
+            # Remove empty file if it exists
+            if os.path.exists(empty_filename):
+                try:
+                    os.remove(empty_filename)
+                    print("Removed empty.nii.gz file")
+                except Exception as e:
+                    print(f"Warning: Could not remove empty file: {e}")
+            
+            # Use labelmap method only - more stable for .nii.gz format
+            print("Using labelmap method for .nii.gz save")
+            self._saveThroughLabelmap(segmentationNode, seg_filename, id_actual)
+                        
+        except Exception as e:
+            print(f"General error in saveCurrentSegmentationForCurrentRow: {str(e)}")
+            slicer.util.errorDisplay(f"Error saving segmentation: {str(e)}")
+    
+    def _createEmptyFile(self, empty_filename):
+        """Helper to create empty file safely"""
+        if not os.path.exists(empty_filename):
+            try:
+                with open(empty_filename, 'wb') as f:
+                    pass
+                print(f"Created empty file: {empty_filename}")
+                slicer.util.infoDisplay(f"No segmentation found. Created empty file: {empty_filename}")
+            except Exception as empty_error:
+                print(f"Error creating empty file: {str(empty_error)}")
+                slicer.util.errorDisplay(f"Error creating empty file: {str(empty_error)}")
+    
+    def _saveThroughLabelmap(self, segmentationNode, seg_filename, id_actual):
+        """Helper to save segmentation through labelmap method"""
+        import time
+        labelmapVolumeNode = None
+        try:
+            print("Starting labelmap save process...")
+            
+            # Create labelmap node with unique name
+            timestamp = str(int(time.time() * 1000))  # millisecond timestamp
+            labelmapVolumeNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLLabelMapVolumeNode")
+            labelmapVolumeNode.SetName(f"TempLabelmap_{id_actual}_{timestamp}")
+            
+            print(f"Created temporary labelmap node: {labelmapVolumeNode.GetName()}")
+            
+            # Process events and wait
+            slicer.app.processEvents()
+            time.sleep(0.2)  # Increased delay
+            
+            # Export segments to labelmap with error checking
+            print("Exporting segments to labelmap...")
+            logic = slicer.modules.segmentations.logic()
+            
+            # Verify segmentation node is valid before export
+            if not segmentationNode or not segmentationNode.GetSegmentation():
+                raise Exception("Invalid segmentation node")
+                
+            # Set reference geometry if not set
+            masterVolumeNode = self.segmentEditorWidget.sourceVolumeNode()
+            if masterVolumeNode:
+                segmentationNode.SetReferenceImageGeometryParameterFromVolumeNode(masterVolumeNode)
+                print("Set reference geometry from master volume")
+            
+            # Export with error checking
+            result = logic.ExportAllSegmentsToLabelmapNode(segmentationNode, labelmapVolumeNode)
+            if not result:
+                raise Exception("ExportAllSegmentsToLabelmapNode failed")
+            
+            print("Export completed successfully")
+            
+            # Process events and wait
+            slicer.app.processEvents()
+            time.sleep(0.2)  # Increased delay
+            
+            # Verify the labelmap was created properly
+            imageData = labelmapVolumeNode.GetImageData()
+            if imageData is None:
+                raise Exception("Labelmap creation failed - no image data")
+            
+            print(f"Labelmap created with dimensions: {imageData.GetDimensions()}")
+            
+            # Save the labelmap with full path verification
+            print(f"Saving labelmap to: {seg_filename}")
+            
+            # Ensure directory exists
+            import os
+            os.makedirs(os.path.dirname(seg_filename), exist_ok=True)
+            
+            # Use more specific save method for NIfTI
+            success = slicer.util.saveNode(labelmapVolumeNode, seg_filename, 
+                                         {"useCompression": True})
+            
+            if success:
+                # Verify file was actually created
+                if os.path.exists(seg_filename):
+                    file_size = os.path.getsize(seg_filename)
+                    print(f"Segmentation saved successfully: {seg_filename} ({file_size} bytes)")
+                    slicer.util.infoDisplay(f"Segmentation saved: {seg_filename}")
+                else:
+                    raise Exception("File was not created despite success flag")
+            else:
+                raise Exception("saveNode returned False")
+                
+        except Exception as labelmap_error:
+            print(f"Error during labelmap save: {str(labelmap_error)}")
+            slicer.util.errorDisplay(f"Error saving segmentation: {str(labelmap_error)}")
+            
+        finally:
+            # Clean up temporary node with maximum safety
+            if labelmapVolumeNode:
+                try:
+                    print("Starting cleanup of temporary nodes...")
+                    
+                    # Multiple delays and process events
+                    time.sleep(0.2)
+                    slicer.app.processEvents()
+                    
+                    # Check if node still exists before removing
+                    node_id = labelmapVolumeNode.GetID()
+                    if slicer.mrmlScene.GetNodeByID(node_id):
+                        print(f"Removing node: {labelmapVolumeNode.GetName()}")
+                        slicer.mrmlScene.RemoveNode(labelmapVolumeNode)
+                        print("Node removed successfully")
+                        
+                        # Extra processing to ensure cleanup
+                        slicer.app.processEvents()
+                        time.sleep(0.1)
+                        
+                        # Verify removal
+                        if not slicer.mrmlScene.GetNodeByID(node_id):
+                            print("Node cleanup verified")
+                        else:
+                            print("Warning: Node still exists after removal")
+                    else:
+                        print("Node was already removed")
+                        
+                    # Final cleanup
+                    slicer.app.processEvents()
+                    time.sleep(0.1)
+                    
+                    print("Cleanup completed successfully")
+                    
+                except Exception as cleanup_error:
+                    print(f"Error cleaning up labelmap node: {str(cleanup_error)}")
+                    # Don't show error dialog for cleanup issues
+                    
+            print("_saveThroughLabelmap function completed")
 
     def updateSegmentationProgress(self):
         """
