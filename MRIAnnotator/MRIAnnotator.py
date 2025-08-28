@@ -163,6 +163,7 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
         self.imagePaths = []
         self.currentIndex = -1
         self.segmentedIndices = set()
+        self.hasUnsavedChanges = False  # Track if there are unsaved segmentation changes
 
         self.currentReportPath = None
 
@@ -321,31 +322,93 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
         # Check if there are any segments
         return segmentation.GetNumberOfSegments() > 0
 
+    def _hasImagePathInUpdatedCSV(self, imageIndex):
+        """
+        Check if the image at the given index has its path recorded in the updated CSV.
+        Returns True if the path exists in the updated CSV, False otherwise.
+        """
+        if imageIndex < 0 or imageIndex >= len(self.imagePaths):
+            return False
+            
+        try:
+            # Get the updated CSV path
+            directoryPath = self.directoryPathEdit.text
+            if not directoryPath:
+                return False
+                
+            original_csv_name = getattr(self, 'original_csv_path', 'dataset.csv')
+            if original_csv_name.endswith('.csv'):
+                updated_csv_name = os.path.basename(original_csv_name)[:-4] + '_updated.csv'
+            else:
+                updated_csv_name = os.path.basename(original_csv_name) + '_updated.csv'
+                
+            updated_csv_path = os.path.join(directoryPath, updated_csv_name)
+            
+            # Check if updated CSV exists
+            if not os.path.exists(updated_csv_path):
+                print(f"Updated CSV not found: {updated_csv_path}")
+                return False
+            
+            # Get current patient data
+            current_patient = self.imagePaths[imageIndex]
+            patient_id = current_patient.get('ID', f'patient_{imageIndex:03d}')
+            
+            # Read the updated CSV and check if this patient has a segmentation path
+            with open(updated_csv_path, 'r', newline='', encoding='utf-8') as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    if row.get('ID') == patient_id:
+                        # Check if there's a segmentation path (usually in 't2_tumor_reader1' column)
+                        segmentation_path = row.get('t2_tumor_reader1', '').strip()
+                        if segmentation_path:
+                            print(f"Found segmentation path for patient {patient_id}: {segmentation_path}")
+                            return True
+                        else:
+                            print(f"No segmentation path found for patient {patient_id} in updated CSV")
+                            return False
+            
+            print(f"Patient {patient_id} not found in updated CSV")
+            return False
+            
+        except Exception as e:
+            print(f"Error checking updated CSV: {e}")
+            return False
+
+    def _hasValidImagePaths(self, imageIndex):
+        """
+        Check if the image at the given index has valid file paths.
+        Returns True if at least one valid image file exists, False otherwise.
+        """
+        if imageIndex < 0 or imageIndex >= len(self.imagePaths):
+            return False
+            
+        imagePaths = self.imagePaths[imageIndex]
+        directoryPath = self.directoryPathEdit.text
+        
+        # Check if any of the channel modalities have valid paths
+        for channel in ['Red', 'Yellow', 'Green']:
+            modality = self.selectedChannelModalities.get(channel)
+            if modality and modality in imagePaths:
+                file_path = os.path.join(directoryPath, imagePaths[modality])
+                if os.path.exists(file_path):
+                    return True
+        
+        return False
+
     def showNavigationWarning(self, action_name):
         """
-        Show a warning dialog when navigating without saving.
+        Show a warning dialog when navigating to a patient not in the updated CSV.
         Returns True if user wants to continue, False otherwise.
         """
-        segmentationNode = self.segmentEditorWidget.segmentationNode()
-        has_segments = False
-        if segmentationNode:
-            segmentation = segmentationNode.GetSegmentation()
-            if segmentation:
-                has_segments = segmentation.GetNumberOfSegments() > 0
-
         msg = qt.QMessageBox()
         msg.setIcon(qt.QMessageBox.Warning)
-        msg.setWindowTitle("Navegación sin guardar")
+        msg.setWindowTitle("Paciente sin ruta guardada")
         
-        if has_segments:
-            msg.setText("Hay una segmentación activa que no se ha guardado.")
-            msg.setInformativeText(f"¿Desea continuar con '{action_name}' sin guardar?\n\nLa segmentación se perderá si continúa.\n\nRecuerde usar 'Save Segmentation as Image' para guardar.")
-        else:
-            msg.setText("No se ha guardado ninguna segmentación para este paciente.")
-            msg.setInformativeText(f"¿Desea continuar con '{action_name}'?\n\nSi realizó alguna segmentación, recuerde usar 'Save Segmentation as Image' para guardar.")
+        msg.setText("Este paciente no tiene una ruta de segmentación guardada en el CSV actualizado.")
+        msg.setInformativeText(f"¿Desea continuar con '{action_name}' de todos modos?\n\nEste paciente podría necesitar ser procesado.")
         
         msg.setStandardButtons(qt.QMessageBox.Yes | qt.QMessageBox.No)
-        msg.setDefaultButton(qt.QMessageBox.No)
+        msg.setDefaultButton(qt.QMessageBox.Yes)  # Changed to Yes as default since this is more of an info warning
         
         result = msg.exec_()
         return result == qt.QMessageBox.Yes
@@ -359,16 +422,17 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
             slicer.util.errorDisplay("No images loaded from CSV.")
             return
 
-        # Always warn user about navigation without saving
-        if not self.showNavigationWarning("Next"):
-            return  # User chose not to continue
-
-        self.currentIndex += 1
-        if self.currentIndex >= len(self.imagePaths):
+        next_index = self.currentIndex + 1
+        if next_index >= len(self.imagePaths):
             slicer.util.infoDisplay("No more images.")
-            self.currentIndex = len(self.imagePaths) - 1
             return
 
+        # Show warning only if the next image is NOT in the updated CSV
+        if not self._hasImagePathInUpdatedCSV(next_index):
+            if not self.showNavigationWarning("Next"):
+                return  # User chose not to continue
+        
+        self.currentIndex = next_index
         self._loadCurrentPatientImages()
         # No update segmentation progress automatically - only when user saves manually
 
@@ -381,12 +445,17 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
             slicer.util.errorDisplay("No images loaded from CSV.")
             return
 
-        self.currentIndex -= 1
-        if self.currentIndex < 0:
+        previous_index = self.currentIndex - 1
+        if previous_index < 0:
             slicer.util.infoDisplay("No previous images.")
-            self.currentIndex = 0
             return
 
+        # Show warning only if the previous image is NOT in the updated CSV
+        if not self._hasImagePathInUpdatedCSV(previous_index):
+            if not self.showNavigationWarning("Previous"):
+                return  # User chose not to continue
+        
+        self.currentIndex = previous_index
         self._loadCurrentPatientImages()
         # No update segmentation progress automatically - only when user saves manually
 
@@ -754,8 +823,33 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
         self.segmentEditorWidget.setSegmentationNode(segmentationNode)
         self.segmentEditorWidget.setSourceVolumeNode(masterVolumeNode)
         
+        # Connect to segmentation changes to track unsaved changes
+        if segmentationNode:
+            segmentationNode.GetSegmentation().AddObserver(
+                segmentationNode.GetSegmentation().SegmentAdded, 
+                self.onSegmentationChanged
+            )
+            segmentationNode.GetSegmentation().AddObserver(
+                segmentationNode.GetSegmentation().SegmentRemoved, 
+                self.onSegmentationChanged
+            )
+            segmentationNode.GetSegmentation().AddObserver(
+                segmentationNode.GetSegmentation().SegmentModified, 
+                self.onSegmentationChanged
+            )
+        
+        # Reset unsaved changes flag when loading new patient
+        self.hasUnsavedChanges = False
+        
         # Ensure the segmentation is properly displayed
         slicer.app.processEvents()
+
+    def onSegmentationChanged(self, caller, event):
+        """
+        Called when the segmentation is modified. Marks that there are unsaved changes.
+        """
+        self.hasUnsavedChanges = True
+        print("Segmentation changed - marking as having unsaved changes")
 
     def clearAllSegmentations(self):
         """
@@ -876,10 +970,17 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
             slicer.util.errorDisplay("No se ha configurado el directorio raíz.")
             return
             
-        # Crear estructura de carpetas: directorio_raiz/patient_id/
-        patient_folder = os.path.join(directoryPath, patient_id)
+        # Crear carpeta "edited" dentro del directorio raíz
+        edited_folder = os.path.join(directoryPath, "edited")
+        if not os.path.exists(edited_folder):
+            os.makedirs(edited_folder)
+            print(f"Created 'edited' folder: {edited_folder}")
+            
+        # Crear estructura de carpetas: directorio_raiz/edited/patient_id/
+        patient_folder = os.path.join(edited_folder, patient_id)
         if not os.path.exists(patient_folder):
             os.makedirs(patient_folder)
+            print(f"Created patient folder: {patient_folder}")
             
         # Nombre por defecto del archivo
         default_filename = "t2_tumor_reader1.nii.gz"
@@ -930,6 +1031,10 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
                 self.segmentedIndices.add(self.currentIndex)
                 self.updateSegmentationProgress()
                 print(f"Marked patient {self.currentIndex} as segmented")
+            
+            # Mark that changes have been saved
+            self.hasUnsavedChanges = False
+            print("Segmentation saved - clearing unsaved changes flag")
                 
         except Exception as e:
             slicer.util.errorDisplay(f"Error al guardar: {str(e)}")
