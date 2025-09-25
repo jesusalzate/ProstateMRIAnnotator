@@ -322,6 +322,60 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
         # Check if there are any segments
         return segmentation.GetNumberOfSegments() > 0
 
+    def _getSegmentationPathFromUpdatedCSV(self, imageIndex):
+        """
+        Get the segmentation path from the updated CSV for the given image index.
+        Returns the full path to the segmentation file if it exists, None otherwise.
+        """
+        if imageIndex < 0 or imageIndex >= len(self.imagePaths):
+            return None
+            
+        try:
+            # Get the updated CSV path
+            directoryPath = self.directoryPathEdit.text
+            if not directoryPath:
+                return None
+                
+            original_csv_name = getattr(self, 'original_csv_path', 'dataset.csv')
+            if original_csv_name.endswith('.csv'):
+                updated_csv_name = os.path.basename(original_csv_name)[:-4] + '_updated.csv'
+            else:
+                updated_csv_name = os.path.basename(original_csv_name) + '_updated.csv'
+                
+            updated_csv_path = os.path.join(directoryPath, updated_csv_name)
+            
+            # Check if updated CSV exists
+            if not os.path.exists(updated_csv_path):
+                return None
+            
+            # Get current patient data
+            current_patient = self.imagePaths[imageIndex]
+            patient_id = current_patient.get('ID', f'patient_{imageIndex:03d}')
+            
+            # Read the updated CSV and get the segmentation path
+            with open(updated_csv_path, 'r', newline='', encoding='utf-8') as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    if row.get('ID') == patient_id:
+                        # Get the segmentation path (usually in 't2_tumor_reader1' column)
+                        segmentation_path = row.get('t2_tumor_reader1', '').strip()
+                        if segmentation_path:
+                            full_path = os.path.join(directoryPath, segmentation_path)
+                            if os.path.exists(full_path):
+                                print(f"Found existing segmentation for patient {patient_id}: {full_path}")
+                                return full_path
+                            else:
+                                print(f"Segmentation path in CSV not found on disk: {full_path}")
+                                return None
+                        else:
+                            return None
+            
+            return None
+            
+        except Exception as e:
+            print(f"Error getting segmentation path from updated CSV: {e}")
+            return None
+
     def _hasImagePathInUpdatedCSV(self, imageIndex):
         """
         Check if the image at the given index has its path recorded in the updated CSV.
@@ -486,15 +540,24 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
                 channel_paths[channel] = None
                 print(f"{channel} channel: No modality assigned or not found in CSV")
         
-        # Get lesion path using selected segmentation modality
-        lesion_col = self.selectedSegmentationModality if hasattr(self, 'selectedSegmentationModality') and self.selectedSegmentationModality else 'Lesion'
-        lesionPath = os.path.join(directoryPath, imagePaths.get(lesion_col, ''))
+        # First check if there's an existing segmentation in the updated CSV
+        existing_segmentation_path = self._getSegmentationPathFromUpdatedCSV(self.currentIndex)
+        
+        if existing_segmentation_path:
+            # Use the existing segmentation from the updated CSV
+            lesionPath = existing_segmentation_path
+            print(f"Using existing segmentation from updated CSV: {lesionPath}")
+        else:
+            # Get lesion path using selected segmentation modality from original CSV
+            lesion_col = self.selectedSegmentationModality if hasattr(self, 'selectedSegmentationModality') and self.selectedSegmentationModality else 'Lesion'
+            lesionPath = os.path.join(directoryPath, imagePaths.get(lesion_col, ''))
+            print(f"No existing segmentation found, using original CSV path: {lesionPath}")
         
         # Debug prints
         print(f"Selected channel modalities: {self.selectedChannelModalities}")
         print(f"Channel paths: {channel_paths}")
-        print(f"Selected segmentation modality: {lesion_col}")
-        print(f"Lesion path: {lesionPath}")
+        print(f"Selected segmentation modality: {lesion_col if not existing_segmentation_path else 'from updated CSV'}")
+        print(f"Final lesion path: {lesionPath}")
         print(f"Available columns: {list(imagePaths.keys())}")
 
         print("Calling _loadPatientImagesWithCustomChannels...")
