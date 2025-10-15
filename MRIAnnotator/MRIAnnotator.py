@@ -8,7 +8,6 @@ import numpy as np
 import csv
 from typing import Iterable, Optional, Union
 
-
 class MRIAnnotator(ScriptedLoadableModule):
     def __init__(self, parent):
         """
@@ -47,7 +46,7 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
 
         # Button to load CSV
         self.loadCSVButton = qt.QPushButton("Load CSV")
-        
+
         # Layout for CSV loading
         csvLayout = qt.QHBoxLayout()
         csvLayout.addWidget(self.loadCSVButton)
@@ -101,27 +100,6 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
         saveGroup.setLayout(saveLayout)
         self.layout.addWidget(saveGroup)
 
-        # Style buttons
-        button_style = """
-            QPushButton {
-                background-color: #1976d2;
-                color: white;
-                border-radius: 6px;
-                padding: 6px 16px;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: #1565c0;
-            }
-            QPushButton:pressed {
-                background-color: #0d47a1;
-            }
-        """
-        for btn in [self.loadCSVButton, self.browseDirectoryButton, self.nextButton, self.previousButton, self.saveSegmentationImageButton, self.selectChannelModalitiesButton]:
-            btn.setStyleSheet(button_style)
-            btn.setMinimumHeight(32)
-            btn.setMinimumWidth(120)
-
         # Visual separator
         line = qt.QFrame()
         line.setFrameShape(qt.QFrame.HLine)
@@ -145,10 +123,18 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
         self.layout.addWidget(self.progressLabel)
         self.layout.addWidget(self.progressBar)
 
+        # Button to toggle report visibility
+        self.toggleReportButton = qt.QPushButton("Ocultar Reporte")
+        self.toggleReportButton.setToolTip("Ocultar/Mostrar el reporte de texto médico")
+        self.toggleReportButton.connect('clicked(bool)', self.onToggleReportButton)
+        self.layout.addWidget(self.toggleReportButton)
+
         # Text Report Viewer (for displaying report TXT in 3D view area)
         self.reportViewer = qt.QTextBrowser()
         self.reportViewer.setMinimumHeight(300)
         self.reportViewer.setText("No report loaded")
+        
+        # Report group
         reportGroup = qt.QGroupBox("Medical Report (TXT)")
         reportLayout = qt.QVBoxLayout()
         reportLayout.addWidget(self.reportViewer)
@@ -156,6 +142,28 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
         self.layout.addWidget(reportGroup)
 
         self.linkSliceViews()
+        
+        # Style buttons (after all buttons are created)
+        button_style = """
+            QPushButton {
+                background-color: #1976d2;
+                color: white;
+                border-radius: 6px;
+                padding: 6px 16px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #1565c0;
+            }
+            QPushButton:pressed {
+                background-color: #0d47a1;
+            }
+        """
+        for btn in [self.loadCSVButton, self.browseDirectoryButton, self.nextButton, self.previousButton, self.saveSegmentationImageButton, self.selectChannelModalitiesButton, self.toggleReportButton]:
+            btn.setStyleSheet(button_style)
+            btn.setMinimumHeight(32)
+            btn.setMinimumWidth(120)
+        
         # Initialize tracking of loaded nodes for safe removal
         self.loadedVolumeNodes = []
         self.loadedSegmentationNode = None
@@ -166,6 +174,7 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
         self.hasUnsavedChanges = False  # Track if there are unsaved segmentation changes
 
         self.currentReportPath = None
+        self.reportVisible = True  # Track report visibility state (visible by default)
 
     def onLoadCSVButton(self):
         """
@@ -305,6 +314,31 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
         except Exception as e:
             error_msg = f"Error selecting directory: {str(e)}"
             print(error_msg)  # Debug print
+            slicer.util.errorDisplay(error_msg)
+
+    def onToggleReportButton(self):
+        """
+        Handle the event when the 'Toggle Report' button is clicked.
+        Shows or hides the report viewer and updates the button text.
+        """
+        try:
+            # Toggle the visibility state
+            self.reportVisible = not self.reportVisible
+            
+            if self.reportVisible:
+                # Show the report viewer
+                self.reportViewer.show()
+                self.toggleReportButton.setText("Ocultar Reporte")
+                print("Report viewer shown")
+            else:
+                # Hide the report viewer
+                self.reportViewer.hide()
+                self.toggleReportButton.setText("Mostrar Reporte")
+                print("Report viewer hidden")
+                
+        except Exception as e:
+            error_msg = f"Error toggling report visibility: {str(e)}"
+            print(error_msg)
             slicer.util.errorDisplay(error_msg)
 
     def hasUnsavedSegmentation(self):
@@ -574,74 +608,45 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
 
     def showReportTXT(self, imagePaths):
         """
-        Display the TXT pointed to by the 'report' column in the 3D view area, if present.
-        If present, hide the 3D view and show the TXT in su lugar. If not, restore the 3D view.
+        Display the TXT pointed to by the 'report' column in the sidebar report viewer.
         """
         print("[TXT] showReportTXT called")
         report_path = imagePaths.get('report', None)
         print(f"[TXT] report_path from CSV: {report_path}")
-        lm = slicer.app.layoutManager()
-        threeDWidget = lm.threeDWidget(0) if hasattr(lm, 'threeDWidget') else None
-        threeDView = threeDWidget.threeDView() if threeDWidget else None
-        centralWidget = threeDWidget.parentWidget() if threeDWidget else None
-        print(f"[TXT] threeDWidget: {threeDWidget}")
-        print(f"[TXT] threeDView: {threeDView}")
-        print(f"[TXT] centralWidget: {centralWidget}")
 
         if report_path:
             directoryPath = self.directoryPathEdit.text
             print(f"[TXT] directoryPath: {directoryPath}")
             abs_report_path = os.path.join(directoryPath, report_path) if not os.path.isabs(report_path) else report_path
             print(f"[TXT] abs_report_path: {abs_report_path}")
-            print(f"[TXT] os.path.exists(abs_report_path): {os.path.exists(abs_report_path)}")
-            print(f"[TXT] abs_report_path.lower().endswith('.txt'): {abs_report_path.lower().endswith('.txt')}")
+            
             if os.path.exists(abs_report_path) and abs_report_path.lower().endswith('.txt'):
                 self.currentReportPath = abs_report_path
                 try:
-                    # Oculta la vista 3D
-                    if threeDWidget:
-                        print("[TXT] Hiding threeDWidget")
-                        threeDWidget.hide()
-                    # Lee y muestra el contenido del archivo TXT
+                    # Read and display the TXT file content in sidebar
                     print("[TXT] Reading TXT file content")
                     with open(abs_report_path, 'r', encoding='utf-8') as f:
                         txt_content = f.read()
                     self.reportViewer.setText(txt_content)
-                    self.reportViewer.show()
-                    # Si el visor TXT no está en el área central, lo movemos
-                    if centralWidget and self.reportViewer.parent() != centralWidget:
-                        print("[TXT] Moving reportViewer to centralWidget")
-                        self.reportViewer.setParent(centralWidget)
-                        layout = centralWidget.layout()
-                        if layout:
-                            # Elimina widgets previos
-                            for i in reversed(range(layout.count())):
-                                item = layout.itemAt(i)
-                                widget = item.widget()
-                                if widget:
-                                    print(f"[TXT] Hiding and removing widget: {widget}")
-                                    widget.hide()
-                                    layout.removeWidget(widget)
-                            print("[TXT] Adding reportViewer to centralWidget layout")
-                            layout.addWidget(self.reportViewer)
-                        self.reportViewer.show()
+                    print("[TXT] Report content loaded in sidebar viewer")
+                    
                 except Exception as e:
-                    print(f"[TXT] Error displaying TXT: {e}")
-                    self.reportViewer.setText(f"Could not display TXT. Error: {str(e)}")
+                    print(f"[TXT] Error reading TXT file: {e}")
+                    self.reportViewer.setText(f"Error reading report file: {str(e)}")
             else:
-                print("[TXT] No valid TXT found, restoring 3D view")
+                print("[TXT] No valid TXT found")
                 self.currentReportPath = None
                 self.reportViewer.setText("No valid TXT report found for this patient.")
-                # Restaura la vista 3D
-                if threeDWidget:
-                    threeDWidget.show()
         else:
-            print("[TXT] No report for this patient, restoring 3D view")
+            print("[TXT] No report for this patient")
             self.currentReportPath = None
             self.reportViewer.setText("No report available for this patient.")
-            # Restaura la vista 3D
-            if threeDWidget:
-                threeDWidget.show()
+        
+        # Respect the current visibility state
+        if self.reportVisible:
+            self.reportViewer.show()
+        else:
+            self.reportViewer.hide()
 
     def _loadPatientImages(self, t2Path, adcPath, dwiPath, lesionPath):
         """
@@ -809,8 +814,6 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
         
         # Eliminar el nodo de volumen de etiquetas temporal
         slicer.mrmlScene.RemoveNode(labelmapVolumeNode)
-
-    
 
     def resampleImagesToT2(self, t2Node, adcNode, dwiNode):
         """
@@ -1444,7 +1447,6 @@ class MRIAnnotatorWidget(ScriptedLoadableModuleWidget):
                 sliceCompositeNode = sliceWidget.mrmlSliceCompositeNode()
                 sliceCompositeNode.SetBackgroundVolumeID(None)
                 print(f"Cleared {channel} channel slice view")
-
 
     def saveCurrentSegmentationForCurrentRow(self):
         """
